@@ -89,7 +89,3 @@ Mesmo mapeamento de colunas. Aceita `.xlsx` e `.xls`. Use o botão "Baixar model
 - Google Fonts (Inter, Roboto, Poppins)
 - Exportação PDF via `window.print()` com `@page` estilizado
 - Sem dependências de backend -- tudo no lado do cliente
-
-## Licença
-
-MIT
