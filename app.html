@@ -662,8 +662,14 @@ function DesignPanel({ d, setD }) {
   const I = { width:'100%', padding:'6px 8px', fontSize:12, border:'1px solid #c3c6d7', borderRadius:4, fontFamily:'inherit', color:'#0b1c30', background:'#fff', outline:'none' };
 
   const ColorRow = ({ label, k }) => {
-    const inputRef = useRef(null);
+    const swatchRef = useRef(null);
     const dragRef = useRef({ sx: 0, sy: 0, hsl: null, moved: false });
+    const pickNative = () => {
+      const inp = document.createElement('input');
+      inp.type = 'color'; inp.value = d[k];
+      inp.addEventListener('input', () => setD(p => ({ ...p, [k]: inp.value })));
+      inp.click();
+    };
     const handleMD = (e) => {
       e.preventDefault();
       const m = dragRef.current;
@@ -672,17 +678,17 @@ function DesignPanel({ d, setD }) {
       m.moved = false;
       const handleMM = (e) => {
         const dx = e.clientX - m.sx, dy = m.sy - e.clientY;
-        if (!m.moved && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) m.moved = true;
-        if (!m.moved) return;
+        if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
+        m.moved = true;
         const { h, s, l: bl } = m.hsl;
-        const nh = (((h + dx / 280) % 1) + 1) % 1;
-        const nl = Math.max(0, Math.min(1, bl + dy / 140));
+        const nh = (((h + dx / 260) % 1) + 1) % 1;
+        const nl = Math.max(0, Math.min(1, bl + dy / 130));
         setD(p => ({ ...p, [k]: hslToHex({ h: nh, s, l: nl }) }));
       };
       const handleMU = () => {
         document.removeEventListener('mousemove', handleMM);
         document.removeEventListener('mouseup', handleMU);
-        if (!m.moved) inputRef.current?.click();
+        if (!m.moved) pickNative();
       };
       document.addEventListener('mousemove', handleMM);
       document.addEventListener('mouseup', handleMU);
@@ -692,13 +698,11 @@ function DesignPanel({ d, setD }) {
         <span style={{ fontSize:12, color:'#434655' }}>{label}</span>
         <div style={{ display:'flex', alignItems:'center', gap:6 }}>
           <span style={{ fontSize:10, color:'#737686', fontFamily:'monospace' }}>{d[k]}</span>
-          <div style={{ position:'relative', width:30, height:30 }}>
-            <input ref={inputRef} type="color" value={d[k]} onChange={set(k)}
-              style={{ position:'absolute', inset:0, opacity:0, cursor:'pointer', width:'100%', height:'100%' }}/>
-            <div onMouseDown={handleMD}
-              style={{ width:'100%', height:'100%', borderRadius:4, background:d[k],
-                cursor:'grab', border:'1px solid #c3c6d7', position:'relative' }}/>
-          </div>
+          <div ref={swatchRef} onMouseDown={handleMD}
+            onDoubleClick={pickNative}
+            style={{ width:30, height:30, borderRadius:4, background:d[k],
+              cursor:'grab', border:'1px solid #c3c6d7' }}
+            title="Arraste para matiz/luz · Duplo clique para seletor nativo"/>
         </div>
       </div>
     );
