@@ -1,0 +1,950 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>CatalogStudio</title>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Roboto:wght@300;400;500;700&family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;background:#f8f9ff;color:#0b1c30;overflow:hidden;height:100vh}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#c3c6d7;border-radius:3px}
+input[type=range]{-webkit-appearance:none;appearance:none;height:4px;border-radius:2px;background:#dce9ff;outline:none;cursor:pointer;width:100%}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#2563eb;cursor:pointer}
+select{-webkit-appearance:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23737686' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center}
+@media print{body>*{display:none!important}#__print_root{display:block!important}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useRef, useCallback } = React;
+
+/* ── utils ─────────────────────────────────────────────────────────────── */
+const uid = () => Math.random().toString(36).slice(2, 9);
+
+const PAPER = {
+  A4:     { w: 794,  h: 1123 },
+  A3:     { w: 1123, h: 1587 },
+  Letter: { w: 816,  h: 1056 },
+};
+
+const FONTS = ['Inter','Roboto','Poppins','Georgia','Arial'];
+
+const DEF_DESIGN = {
+  companyName: 'Catalog Pro',
+  catalogTitle: 'Catálogo de Produtos',
+  footerText: '© 2024',
+  priceLabel: 'Preço',
+  defaultLinkLabel: 'Ver produto',
+  primaryColor: '#2563eb',
+  accentColor: '#ffffff',
+  pageBg: '#f0f4ff',
+  cardBg: '#ffffff',
+  bodyColor: '#0b1c30',
+  fontFamily: 'Inter',
+  fontSize: 11,
+  headerStyle: 'full',
+  cardRadius: 4,
+  imgHeight: 160,
+  cardBorders: true,
+  showSku: true,
+  showPcs: true,
+  showPrice: true,
+  showDesc: true,
+  showLink: false,
+  logoUrl: null,
+};
+
+const DEF_LAYOUT = { paper: 'A4', orientation: 'portrait', cols: 3, rows: 3 };
+
+const SAMPLES = [
+  { id: uid(), name: 'Peitoral Tático Pro', sku: 'PET-8820', description: 'Ajuste em 4 pontos, alça de controle rápido e fixação em D reforçados.', price: 'R$145,00', pcs: '24 UN/CX', imageUrl: '', linkUrl: '', linkLabel: '' },
+  { id: uid(), name: 'Ração Ultra Premium',  sku: 'FEED-550', description: 'Fórmula hipoalergênica sem grãos, enriquecida com ômega 3 e 6.',       price: 'R$299,90', pcs: '15.0KG',  imageUrl: '', linkUrl: '', linkLabel: '' },
+  { id: uid(), name: 'Comedouro WiFi',        sku: 'TECH-900', description: 'Agendamento via app, gravação de voz e câmera 1080p integrada.',         price: 'R$649,00', pcs: '4.0L',    imageUrl: '', linkUrl: '', linkLabel: '' },
+];
+
+/* ── CSV parser ─────────────────────────────────────────────────────────── */
+function splitRow(line) {
+  const cells = []; let cur = '', inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') { if (inQ && line[i+1] === '"') { cur += '"'; i++; } else inQ = !inQ; }
+    else if (c === ',' && !inQ) { cells.push(cur); cur = ''; }
+    else cur += c;
+  }
+  cells.push(cur);
+  return cells;
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length < 2) return [];
+  const hdrs = splitRow(lines[0]).map(h => h.toLowerCase().replace(/\s+/g,'_'));
+  const MAP = {
+    sku: ['sku','codigo','code'], name: ['name','nome','produto'],
+    description: ['description','descricao','desc'], price: ['price','preco','valor'],
+    pcs: ['pcs','embalagem'], imageUrl: ['image','imagem','image_url'],
+    linkUrl: ['link','url','link_url'], linkLabel: ['link_label','link_texto'],
+  };
+  const idx = {};
+  for (const [f, aliases] of Object.entries(MAP)) {
+    for (const a of aliases) { const i = hdrs.indexOf(a); if (i !== -1) { idx[f] = i; break; } }
+  }
+  return lines.slice(1).filter(l => l.trim()).map(line => {
+    const cells = splitRow(line);
+    const p = { id: uid(), name:'', sku:'', description:'', price:'', pcs:'', imageUrl:'', linkUrl:'', linkLabel:'' };
+    for (const [f, i] of Object.entries(idx)) p[f] = (cells[i] || '').trim();
+    return p;
+  }).filter(p => p.name);
+}
+
+/* ── Excel parser ─────────────────────────────────────────────────────────── */
+function parseExcel(data) {
+  const wb = XLSX.read(data, { type: 'array' });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const raw = XLSX.utils.sheet_to_json(ws, { defval: '' });
+  if (!raw.length) return [];
+  const MAP = {
+    sku: ['sku','codigo','code'], name: ['name','nome','produto'],
+    description: ['description','descricao','desc'], price: ['price','preco','valor'],
+    pcs: ['pcs','embalagem'], imageUrl: ['image','imagem','image_url'],
+    linkUrl: ['link','url','link_url'], linkLabel: ['link_label','link_texto'],
+    linkText: ['linktext','link_texto','textobotao'],
+  };
+  const hdrs = Object.keys(raw[0]).map(h => h.toLowerCase().replace(/\\s+/g,'_'));
+  const idx = {};
+  for (const [f, aliases] of Object.entries(MAP)) {
+    for (const a of aliases) { const i = hdrs.indexOf(a); if (i !== -1) { idx[f] = i; break; } }
+  }
+  return raw.map(row => {
+    const vals = Object.values(row).map(v => String(v).trim());
+    const p = { id: uid(), name:'', sku:'', description:'', price:'', pcs:'', imageUrl:'', linkUrl:'', linkLabel:'' };
+    for (const [f, i] of Object.entries(idx)) p[f] = vals[i] || '';
+    return p;
+  }).filter(p => p.name);
+}
+
+/* ── Download Excel template ─────────────────────────────────────────────── */
+function downloadTemplate(design) {
+  const wb = XLSX.utils.book_new();
+  const row1 = { name: 'Nome do produto' };
+  const row2 = { name: 'Outro produto' };
+  if (design.showSku)  { row1.sku = 'SKU-001'; row2.sku = 'SKU-002'; }
+  if (design.showDesc) { row1.description = 'Descrição do produto'; row2.description = 'Descrição do outro produto'; }
+  if (design.showPrice){ row1.price = 'R$25,00'; row2.price = 'R$39,90'; }
+  if (design.showPcs)  { row1.pcs = '24 UN/CX'; row2.pcs = '12 UN'; }
+  row1.image = 'https://exemplo.com/produto.png';
+  row2.image = '';
+  if (design.showLink) {
+    row1.link = 'https://...';  row1.link_label = 'Ver produto';
+    row2.link = '';             row2.link_label = '';
+  }
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([row1, row2]), 'Produtos');
+  XLSX.writeFile(wb, 'modelo_catalogo.xlsx');
+}
+
+/* ── Icons ──────────────────────────────────────────────────────────────── */
+const PATHS = {
+  plus:     'M12 5v14M5 12h14',
+  upload:   'M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12',
+  trash:    'M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6',
+  up:       'M12 19V5M5 12l7-7 7 7',
+  down:     'M12 5v14M19 12l-7 7-7-7',
+  chevD:    'M6 9l6 6 6-6',
+  chevU:    'M18 15l-6-6-6 6',
+  img:      'M21 19V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2zM8.5 10a1.5 1.5 0 100-3 1.5 1.5 0 000 3zM21 15l-5-5L5 21',
+  csv:      'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8',
+  palette:  'M12 2a10 10 0 100 20A10 10 0 0012 2zM8 12a1 1 0 110-2 1 1 0 010 2zM12 8a1 1 0 110-2 1 1 0 010 2zM16 12a1 1 0 110-2 1 1 0 010 2zM12 16a1 1 0 110-2 1 1 0 010 2z',
+  layout:   'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z',
+  box:      'M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16zM3.27 6.96L12 12.01l8.73-5.05M12 22.08V12',
+  minus:    'M5 12h14',
+  x:        'M18 6L6 18M6 6l12 12',
+  zoomIn:   'M11 19a8 8 0 100-16 8 8 0 000 16zM21 21l-4.35-4.35M11 8v6M8 11h6',
+  zoomOut:  'M11 19a8 8 0 100-16 8 8 0 000 16zM21 21l-4.35-4.35M8 11h6',
+};
+
+function Icon({ n, size = 16, color = 'currentColor' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+      stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <path d={PATHS[n] || PATHS.box}/>
+    </svg>
+  );
+}
+
+/* ── Toggle ─────────────────────────────────────────────────────────────── */
+function Toggle({ checked, onChange, label }) {
+  return (
+    <label style={{ display:'flex', alignItems:'center', justifyContent:'space-between', cursor:'pointer', padding:'5px 0' }}>
+      <span style={{ fontSize:12, color:'#434655' }}>{label}</span>
+      <div onClick={() => onChange(!checked)} style={{
+        width:34, height:18, borderRadius:9,
+        background: checked ? '#2563eb' : '#c3c6d7',
+        position:'relative', transition:'background .18s', cursor:'pointer', flexShrink:0,
+      }}>
+        <div style={{
+          position:'absolute', top:2, left: checked ? 16 : 2,
+          width:14, height:14, borderRadius:7, background:'#fff',
+          transition:'left .18s', boxShadow:'0 1px 3px rgba(0,0,0,.2)',
+        }}/>
+      </div>
+    </label>
+  );
+}
+
+/* ── Catalog card ────────────────────────────────────────────────────────── */
+function CatalogCard({ product, d }) {
+  const fs = d.fontSize;
+  return (
+    <div style={{
+      background: d.cardBg,
+      borderRadius: d.cardRadius,
+      border: d.cardBorders ? '1px solid rgba(0,0,0,.08)' : 'none',
+      overflow:'hidden', display:'flex', flexDirection:'column',
+      fontFamily: d.fontFamily,
+    }}>
+      {d.showSku && product.sku && (
+        <div style={{
+          background: d.primaryColor, color: d.accentColor,
+          fontSize: fs - 2, padding:'3px 8px',
+          textTransform:'uppercase', fontWeight:600, letterSpacing:'.06em',
+        }}>{product.sku}</div>
+      )}
+
+      <div style={{ height: d.imgHeight, background:'#f4f6fb', display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden' }}>
+        {product.imageUrl
+          ? <img src={product.imageUrl} alt={product.name} style={{ width:'100%', height:'100%', objectFit:'contain' }}/>
+          : <svg width={36} height={36} viewBox="0 0 24 24" fill="none" stroke="#c3c6d7" strokeWidth={1.3} strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
+            </svg>
+        }
+      </div>
+
+      <div style={{ padding:'8px 10px', flex:1, display:'flex', flexDirection:'column', gap:3 }}>
+        <div style={{ fontWeight:700, fontSize:fs+1, color:d.bodyColor, lineHeight:1.3 }}>
+          {product.name || 'Sem nome'}
+        </div>
+        {d.showDesc && product.description && (
+          <div style={{
+            fontSize:fs-1, color:'#667', lineHeight:1.4,
+            display:'-webkit-box', WebkitLineClamp:4,
+            WebkitBoxOrient:'vertical', overflow:'hidden',
+          }}>{product.description}</div>
+        )}
+        {d.showPcs && product.pcs && (
+          <div style={{ fontSize:fs-2, color:'#999', marginTop:2 }}>{product.pcs}</div>
+        )}
+      </div>
+
+      {d.showPrice && product.price && (
+        <div style={{
+          background:d.primaryColor, color:d.accentColor,
+          padding:'5px 10px', display:'flex', justifyContent:'space-between',
+          alignItems:'center', fontSize:fs, fontWeight:600,
+        }}>
+          <span>{d.priceLabel}</span>
+          <span>{product.price}</span>
+        </div>
+      )}
+
+      {d.showLink && product.linkUrl && (
+        <div style={{ borderTop:'1px solid rgba(0,0,0,.07)', padding:'6px 10px', textAlign:'center' }}>
+          <a href={product.linkUrl} style={{ color:d.primaryColor, fontSize:fs-1, textDecoration:'none', fontWeight:500 }}>
+            {product.linkLabel || d.defaultLinkLabel}
+          </a>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Catalog header ──────────────────────────────────────────────────────── */
+function CatalogHeader({ d }) {
+  if (d.headerStyle === 'none') return null;
+  const minimal = d.headerStyle === 'minimal';
+  return (
+    <div style={{
+      background: minimal ? '#fff' : d.primaryColor,
+      borderBottom: minimal ? `2px solid ${d.primaryColor}` : 'none',
+      padding:'14px 22px', display:'flex', alignItems:'center',
+      justifyContent:'space-between', fontFamily:d.fontFamily,
+    }}>
+      {d.logoUrl
+        ? <img src={d.logoUrl} alt="logo" style={{ maxHeight:36, maxWidth:150, objectFit:'contain' }}/>
+        : <span style={{ fontWeight:700, fontSize:14, color: minimal ? d.primaryColor : d.accentColor, letterSpacing:'-.01em' }}>
+            {d.companyName}
+          </span>
+      }
+      <span style={{ fontSize:12, fontWeight:500, color: minimal ? '#666' : d.accentColor, letterSpacing:'.02em' }}>
+        {d.catalogTitle}
+      </span>
+    </div>
+  );
+}
+
+/* ── Catalog page ────────────────────────────────────────────────────────── */
+function CatalogPage({ products, d, layout, pageNum, total, pageW, pageH }) {
+  const { cols, rows } = layout;
+  return (
+    <div className="catalog-page" style={{
+      width:pageW, height:pageH,
+      background:d.pageBg, fontFamily:d.fontFamily,
+      display:'flex', flexDirection:'column',
+      overflow:'hidden', flexShrink:0,
+      boxShadow:'0 2px 8px rgba(0,0,0,.12),0 16px 40px rgba(0,0,0,.07)',
+    }}>
+      <CatalogHeader d={d}/>
+
+      <div style={{
+        display:'grid',
+        gridTemplateColumns:`repeat(${cols},1fr)`,
+        gap:14, padding:'18px 20px', flex:1,
+        alignContent:'start',
+      }}>
+        {products.map(p => <CatalogCard key={p.id} product={p} d={d}/>)}
+        {Array.from({ length: Math.max(0, cols * rows - products.length) }).map((_, i) => (
+          <div key={'e'+i}/>
+        ))}
+      </div>
+
+      <div style={{
+        borderTop:'1px solid rgba(0,0,0,.06)',
+        padding:'0 22px', height:32,
+        display:'flex', alignItems:'center', justifyContent:'space-between',
+        fontSize:9, color:'#aaa', fontFamily:d.fontFamily,
+      }}>
+        <span>{d.footerText}</span>
+        <span style={{ fontWeight:700, color:d.primaryColor }}>
+          {String(pageNum).padStart(2,'0')} / {String(total).padStart(2,'0')}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/* ── Import modal (CSV + Excel) ──────────────────────────────────────────── */
+function CSVModal({ onImport, onClose, design }) {
+  const [err, setErr] = useState('');
+  const [preview, setPreview] = useState(null);
+  const ref = useRef();
+
+  const handle = e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const name = file.name.toLowerCase();
+
+    if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+      const reader = new FileReader();
+      reader.onload = ev => {
+        try {
+          const rows = parseExcel(new Uint8Array(ev.target.result));
+          if (!rows.length) { setErr('Nenhum produto encontrado no Excel.'); return; }
+          setPreview(rows); setErr('');
+        } catch { setErr('Erro ao processar Excel.'); }
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      const reader = new FileReader();
+      reader.onload = ev => {
+        try {
+          const rows = parseCSV(ev.target.result);
+          if (!rows.length) { setErr('Nenhum produto encontrado.'); return; }
+          setPreview(rows); setErr('');
+        } catch { setErr('Erro ao processar CSV.'); }
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  return (
+    <div style={{
+      position:'fixed', inset:0, background:'rgba(0,0,0,.45)', zIndex:1000,
+      display:'flex', alignItems:'center', justifyContent:'center',
+    }}>
+      <div style={{
+        background:'#fff', borderRadius:8, padding:28, width:480, maxWidth:'90vw',
+        display:'flex', flexDirection:'column', gap:16,
+        boxShadow:'0 20px 60px rgba(0,0,0,.18)',
+      }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <span style={{ fontSize:15, fontWeight:700 }}>Importar dados</span>
+          <button onClick={onClose} style={{ background:'none', border:'none', cursor:'pointer', color:'#737686', display:'flex' }}>
+            <Icon n="x" size={18}/>
+          </button>
+        </div>
+
+        <div style={{ fontSize:11, color:'#737686', lineHeight:1.6, background:'#f8f9ff', borderRadius:4, padding:'10px 12px' }}>
+          Aceita <strong>CSV</strong> ou <strong>Excel (.xlsx / .xls)</strong>.&nbsp;
+          Colunas aceitas: <strong>sku, name, description, price, pcs, image, link</strong>
+        </div>
+
+        <label style={{
+          display:'flex', flexDirection:'column', alignItems:'center', gap:8,
+          border:'2px dashed #c3c6d7', borderRadius:6, padding:'24px 16px',
+          cursor:'pointer', background:'#f8f9ff',
+        }}>
+          <Icon n="csv" size={28} color="#2563eb"/>
+          <span style={{ fontSize:12, fontWeight:500 }}>Clique para selecionar .csv, .xlsx ou .xls</span>
+          <input ref={ref} type="file" accept=".csv,.txt,.xlsx,.xls" style={{ display:'none' }} onChange={handle}/>
+        </label>
+
+        <button onClick={() => downloadTemplate(design)} style={{
+          display:'flex', alignItems:'center', justifyContent:'center', gap:6,
+          padding:'8px 14px', borderRadius:4, border:'1px solid #2563eb',
+          background:'none', cursor:'pointer', fontSize:12, fontWeight:600, color:'#2563eb',
+        }}>
+          <Icon n="csv" size={14} color="#2563eb"/> Baixar modelo Excel
+        </button>
+
+        {err && <div style={{ color:'#ba1a1a', fontSize:12, padding:'8px 12px', background:'#ffdad6', borderRadius:4 }}>{err}</div>}
+
+        {preview && (
+          <div style={{ fontSize:12, color:'#434655' }}>
+            <strong>{preview.length}</strong> produto(s) encontrado(s):&nbsp;
+            {preview.slice(0,3).map(p=>p.name).join(', ')}{preview.length>3?'…':''}
+          </div>
+        )}
+
+        <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+          <button onClick={onClose} style={{ padding:'8px 18px', borderRadius:4, border:'1px solid #c3c6d7', background:'none', cursor:'pointer', fontSize:12, color:'#565e74', fontWeight:500 }}>
+            Cancelar
+          </button>
+          <button
+            disabled={!preview}
+            onClick={() => { onImport(preview); onClose(); }}
+            style={{
+              padding:'8px 18px', borderRadius:4, border:'none', fontSize:12, fontWeight:600,
+              background: preview ? '#2563eb' : '#c3c6d7',
+              color:'#fff', cursor: preview ? 'pointer' : 'not-allowed',
+            }}
+          >Importar {preview ? `(${preview.length})` : ''}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Product item in sidebar ─────────────────────────────────────────────── */
+function ProductItem({ product, index, total, onUpdate, onDelete, onUp, onDown, openId, setOpenId }) {
+  const expanded = openId === product.id;
+  const toggle = () => setOpenId(expanded ? null : product.id);
+  const imgRef = useRef();
+  const f = k => e => onUpdate({ ...product, [k]: e.target.value });
+
+  const iStyle = {
+    width:'100%', padding:'6px 8px', fontSize:12, border:'1px solid #c3c6d7',
+    borderRadius:4, fontFamily:'inherit', color:'#0b1c30', background:'#fff', outline:'none',
+  };
+  const lStyle = {
+    fontSize:10, fontWeight:600, letterSpacing:'.08em', textTransform:'uppercase',
+    color:'#737686', marginBottom:3, display:'block',
+  };
+
+  return (
+    <div style={{ border:'1px solid #e5eeff', borderRadius:6, overflow:'hidden', background: expanded ? '#fff' : '#fafbff' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:8, padding:'9px 12px', cursor:'pointer', userSelect:'none' }} onClick={toggle}>
+        <div style={{
+          width:34, height:34, borderRadius:4, background:'#e5eeff',
+          flexShrink:0, overflow:'hidden', display:'flex', alignItems:'center', justifyContent:'center',
+        }}>
+          {product.imageUrl
+            ? <img src={product.imageUrl} style={{ width:'100%', height:'100%', objectFit:'cover' }}/>
+            : <Icon n="img" size={14} color="#b4c5ff"/>
+          }
+        </div>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontSize:12, fontWeight:600, color:'#0b1c30', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+            {product.name || <span style={{ color:'#aaa', fontStyle:'italic' }}>Sem nome</span>}
+          </div>
+          {product.sku && <div style={{ fontSize:10, color:'#737686', marginTop:1 }}>{product.sku}</div>}
+        </div>
+        <div style={{ display:'flex', gap:1, flexShrink:0 }} onClick={e => e.stopPropagation()}>
+          <button onClick={() => onUp(index)} disabled={index===0} style={{ padding:3, background:'none', border:'none', cursor: index===0 ? 'default':'pointer', opacity: index===0 ? .3:1 }}>
+            <Icon n="up" size={13} color="#565e74"/>
+          </button>
+          <button onClick={() => onDown(index)} disabled={index===total-1} style={{ padding:3, background:'none', border:'none', cursor: index===total-1 ? 'default':'pointer', opacity: index===total-1 ? .3:1 }}>
+            <Icon n="down" size={13} color="#565e74"/>
+          </button>
+          <button onClick={() => onDelete(product.id)} style={{ padding:3, background:'none', border:'none', cursor:'pointer' }}>
+            <Icon n="trash" size={13} color="#ba1a1a"/>
+          </button>
+        </div>
+        <Icon n={expanded ? 'chevU' : 'chevD'} size={13} color="#737686"/>
+      </div>
+
+      {expanded && (
+        <div style={{ padding:'0 12px 14px', display:'flex', flexDirection:'column', gap:10, borderTop:'1px solid #e5eeff' }}>
+          <div style={{ marginTop:10 }}>
+            <span style={lStyle}>Nome *</span>
+            <input style={iStyle} value={product.name} onChange={f('name')} placeholder="Nome do produto"/>
+          </div>
+          <div>
+            <span style={lStyle}>SKU / Código</span>
+            <input style={iStyle} value={product.sku} onChange={f('sku')} placeholder="SKU-001"/>
+          </div>
+          <div>
+            <span style={lStyle}>Descrição</span>
+            <textarea style={{ ...iStyle, resize:'vertical', minHeight:58 }}
+              value={product.description} onChange={f('description')} placeholder="Descrição..."/>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+            <div>
+              <span style={lStyle}>Preço</span>
+              <input style={iStyle} value={product.price} onChange={f('price')} placeholder="R$25,00"/>
+            </div>
+            <div>
+              <span style={lStyle}>Embalagem</span>
+              <input style={iStyle} value={product.pcs} onChange={f('pcs')} placeholder="PCS/CX:100"/>
+            </div>
+          </div>
+          <div>
+            <span style={lStyle}>Link URL</span>
+            <input style={iStyle} value={product.linkUrl} onChange={f('linkUrl')} placeholder="https://..."/>
+          </div>
+          <div>
+            <span style={lStyle}>Texto do botão</span>
+            <input style={iStyle} value={product.linkLabel} onChange={f('linkLabel')} placeholder="(padrão global)"/>
+          </div>
+          <div>
+            <span style={lStyle}>Imagem</span>
+            {product.imageUrl ? (
+              <div style={{ position:'relative' }}>
+                <img src={product.imageUrl} style={{ width:'100%', height:90, objectFit:'contain', borderRadius:4, border:'1px solid #e5eeff', background:'#f8f9ff' }}/>
+                <button onClick={() => onUpdate({ ...product, imageUrl:'' })} style={{
+                  position:'absolute', top:4, right:4, background:'rgba(255,255,255,.9)',
+                  border:'none', borderRadius:3, padding:'2px 7px', cursor:'pointer', fontSize:10, color:'#ba1a1a',
+                }}>Remover</button>
+              </div>
+            ) : (
+              <label style={{
+                display:'flex', alignItems:'center', justifyContent:'center', gap:6,
+                border:'1px dashed #c3c6d7', borderRadius:4, padding:'12px 8px',
+                cursor:'pointer', background:'#f8f9ff', fontSize:11, color:'#737686',
+              }}>
+                <Icon n="upload" size={13} color="#737686"/> Upload de imagem
+                <input ref={imgRef} type="file" accept="image/*" style={{ display:'none' }}
+                  onChange={e => {
+                    const file = e.target.files[0]; if (!file) return;
+                    const r = new FileReader();
+                    r.onload = ev => onUpdate({ ...product, imageUrl: ev.target.result });
+                    r.readAsDataURL(file);
+                  }}/>
+              </label>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Products panel ──────────────────────────────────────────────────────── */
+function ProductsPanel({ products, setProducts, onCSV, d, setD }) {
+  const [openId, setOpenId] = useState(null);
+
+  const add = () => {
+    const id = uid();
+    setProducts(p => [...p, { id, name:'', sku:'', description:'', price:'', pcs:'', imageUrl:'', linkUrl:'', linkLabel:'' }]);
+    setOpenId(id);
+  };
+  const upd = p => setProducts(ps => ps.map(x => x.id === p.id ? p : x));
+  const del = id => setProducts(ps => ps.filter(p => p.id !== id));
+  const up = i => setProducts(ps => { const a=[...ps]; [a[i-1],a[i]]=[a[i],a[i-1]]; return a; });
+  const dn = i => setProducts(ps => { const a=[...ps]; [a[i],a[i+1]]=[a[i+1],a[i]]; return a; });
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
+      <div style={{ padding:'12px 14px', display:'flex', gap:8, borderBottom:'1px solid #e5eeff', flexShrink:0 }}>
+        <button onClick={add} style={{
+          flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:5,
+          background:'#2563eb', color:'#fff', border:'none', borderRadius:4,
+          padding:'8px 10px', fontSize:12, fontWeight:600, cursor:'pointer',
+        }}>
+          <Icon n="plus" size={13} color="#fff"/> Adicionar
+        </button>
+        <button onClick={onCSV} style={{
+          flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:5,
+          background:'none', color:'#565e74', border:'1px solid #c3c6d7', borderRadius:4,
+          padding:'8px 10px', fontSize:12, fontWeight:600, cursor:'pointer',
+        }}>
+          <Icon n="csv" size={13} color="#565e74"/> Importar dados
+        </button>
+      </div>
+      <div style={{ flex:1, overflowY:'auto', padding:'10px 14px', display:'flex', flexDirection:'column', gap:7 }}>
+        {products.length === 0
+          ? <div style={{ textAlign:'center', color:'#aaa', padding:'40px 0', fontSize:12 }}>
+              <div style={{ marginBottom:8 }}><Icon n="box" size={28} color="#dce9ff"/></div>
+              Nenhum produto. Clique em "Adicionar".
+            </div>
+          : products.map((p, i) => (
+              <ProductItem key={p.id} product={p} index={i} total={products.length}
+                onUpdate={upd} onDelete={del} onUp={up} onDown={dn}
+                openId={openId} setOpenId={setOpenId}/>
+            ))
+        }
+      </div>
+
+      <div style={{
+        padding:'10px 14px 12px', borderTop:'1px solid #e5eeff',
+        flexShrink:0, background:'#fafbff',
+      }}>
+        <div style={{ fontSize:9, fontWeight:700, letterSpacing:'.12em', textTransform:'uppercase', color:'#737686', marginBottom:6 }}>
+          Campos visíveis
+        </div>
+        <Toggle checked={d.showSku}   onChange={v=>setD(prev=>({...prev, showSku:v}))}   label="SKU / Código"/>
+        <Toggle checked={d.showPcs}   onChange={v=>setD(prev=>({...prev, showPcs:v}))}   label="Embalagem (PCS)"/>
+        <Toggle checked={d.showPrice} onChange={v=>setD(prev=>({...prev, showPrice:v}))} label="Preço"/>
+        <Toggle checked={d.showDesc}  onChange={v=>setD(prev=>({...prev, showDesc:v}))}  label="Descrição"/>
+        <Toggle checked={d.showLink}  onChange={v=>setD(prev=>({...prev, showLink:v}))}  label="Link / Botão de acesso"/>
+      </div>
+    </div>
+  );
+}
+
+/* ── Design panel ────────────────────────────────────────────────────────── */
+function DesignPanel({ d, setD }) {
+  const set = k => e => setD(prev => ({ ...prev, [k]: e.target.value }));
+  const sv = (k, v) => setD(prev => ({ ...prev, [k]: v }));
+  const logoRef = useRef();
+
+  const S = { padding:'14px 14px', borderBottom:'1px solid #e5eeff' };
+  const T = { fontSize:10, fontWeight:700, letterSpacing:'.12em', textTransform:'uppercase', color:'#004ac6', marginBottom:12 };
+  const L = { fontSize:10, fontWeight:600, letterSpacing:'.08em', textTransform:'uppercase', color:'#737686', marginBottom:3, display:'block' };
+  const I = { width:'100%', padding:'6px 8px', fontSize:12, border:'1px solid #c3c6d7', borderRadius:4, fontFamily:'inherit', color:'#0b1c30', background:'#fff', outline:'none' };
+
+  const ColorRow = ({ label, k }) => (
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'4px 0' }}>
+      <span style={{ fontSize:12, color:'#434655' }}>{label}</span>
+      <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+        <span style={{ fontSize:10, color:'#737686', fontFamily:'monospace' }}>{d[k]}</span>
+        <input type="color" value={d[k]} onChange={set(k)}
+          style={{ width:28, height:28, padding:2, border:'1px solid #c3c6d7', borderRadius:4, cursor:'pointer' }}/>
+      </div>
+    </div>
+  );
+
+  const BtnGroup = ({ opts, k }) => (
+    <div style={{ display:'flex', gap:5 }}>
+      {opts.map(([val, label]) => (
+        <button key={val} onClick={() => sv(k, val)} style={{
+          flex:1, padding:'7px 4px', fontSize:11, fontWeight:600,
+          border:`1px solid ${d[k]===val ? '#2563eb' : '#c3c6d7'}`,
+          borderRadius:4, cursor:'pointer',
+          background: d[k]===val ? '#eff4ff' : '#fff',
+          color: d[k]===val ? '#2563eb' : '#565e74',
+        }}>{label}</button>
+      ))}
+    </div>
+  );
+
+  return (
+    <div style={{ overflowY:'auto', height:'100%' }}>
+      {/* Identity */}
+      <div style={S}>
+        <div style={T}>Identidade</div>
+        <div style={{ display:'flex', flexDirection:'column', gap:9 }}>
+          <div><span style={L}>Nome da empresa</span><input style={I} value={d.companyName} onChange={set('companyName')}/></div>
+          <div><span style={L}>Título do catálogo</span><input style={I} value={d.catalogTitle} onChange={set('catalogTitle')}/></div>
+          <div>
+            <span style={L}>Logotipo</span>
+            {d.logoUrl
+              ? <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                  <img src={d.logoUrl} style={{ height:30, maxWidth:100, objectFit:'contain', border:'1px solid #e5eeff', borderRadius:4 }}/>
+                  <button onClick={() => sv('logoUrl',null)} style={{ fontSize:11, color:'#ba1a1a', background:'none', border:'none', cursor:'pointer' }}>Remover</button>
+                </div>
+              : <label style={{ display:'flex', alignItems:'center', gap:6, border:'1px dashed #c3c6d7', borderRadius:4, padding:'8px 10px', cursor:'pointer', fontSize:11, color:'#737686' }}>
+                  <Icon n="upload" size={12} color="#737686"/> Upload logo
+                  <input ref={logoRef} type="file" accept="image/*" style={{ display:'none' }}
+                    onChange={e => {
+                      const f=e.target.files[0]; if(!f) return;
+                      const r=new FileReader(); r.onload=ev=>sv('logoUrl',ev.target.result); r.readAsDataURL(f);
+                    }}/>
+                </label>
+            }
+          </div>
+          <div><span style={L}>Rodapé</span><input style={I} value={d.footerText} onChange={set('footerText')} placeholder="© 2024"/></div>
+          <div><span style={L}>Label do preço</span><input style={I} value={d.priceLabel} onChange={set('priceLabel')} placeholder="Preço unitário"/></div>
+          {d.showLink && <div><span style={L}>Texto padrão do link</span><input style={I} value={d.defaultLinkLabel} onChange={set('defaultLinkLabel')} placeholder="Ver produto"/></div>}
+        </div>
+      </div>
+
+      {/* Colors */}
+      <div style={S}>
+        <div style={T}>Cores</div>
+        <ColorRow label="Cor primária" k="primaryColor"/>
+        <ColorRow label="Texto sobre primária" k="accentColor"/>
+        <ColorRow label="Fundo da página" k="pageBg"/>
+        <ColorRow label="Fundo do card" k="cardBg"/>
+        <ColorRow label="Texto do corpo" k="bodyColor"/>
+      </div>
+
+      {/* Typography */}
+      <div style={S}>
+        <div style={T}>Tipografia</div>
+        <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+          <div>
+            <span style={L}>Fonte</span>
+            <select style={{ ...I, paddingRight:24 }} value={d.fontFamily} onChange={set('fontFamily')}>
+              {FONTS.map(f => <option key={f} value={f}>{f}</option>)}
+            </select>
+          </div>
+          <div>
+            <span style={L}>Tamanho base: {d.fontSize}px</span>
+            <input type="range" min={8} max={14} value={d.fontSize} onChange={e => sv('fontSize', +e.target.value)}/>
+          </div>
+        </div>
+      </div>
+
+      {/* Header */}
+      <div style={S}>
+        <div style={T}>Cabeçalho</div>
+        <BtnGroup k="headerStyle" opts={[['full','Completo'],['minimal','Mínimo'],['none','Nenhum']]}/>
+      </div>
+
+      {/* Cards */}
+      <div style={S}>
+        <div style={T}>Cards</div>
+        <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+          <div><span style={L}>Raio da borda: {d.cardRadius}px</span><input type="range" min={0} max={20} value={d.cardRadius} onChange={e=>sv('cardRadius',+e.target.value)}/></div>
+          <div><span style={L}>Altura da imagem: {d.imgHeight}px</span><input type="range" min={80} max={280} value={d.imgHeight} onChange={e=>sv('imgHeight',+e.target.value)}/></div>
+          <Toggle checked={d.cardBorders} onChange={v=>sv('cardBorders',v)} label="Bordas dos cards"/>
+        </div>
+      </div>
+      </div>
+  );
+}
+
+/* ── Layout panel ────────────────────────────────────────────────────────── */
+function LayoutPanel({ layout, setLayout, count }) {
+  const sv = (k,v) => setLayout(prev => ({ ...prev, [k]:v }));
+  const { paper, orientation, cols, rows } = layout;
+  const ppp = cols * rows;
+  const pages = Math.max(1, Math.ceil(count / ppp));
+
+  const S = { padding:'14px 14px', borderBottom:'1px solid #e5eeff' };
+  const T = { fontSize:10, fontWeight:700, letterSpacing:'.12em', textTransform:'uppercase', color:'#004ac6', marginBottom:12 };
+  const L = { fontSize:10, fontWeight:600, letterSpacing:'.08em', textTransform:'uppercase', color:'#737686', marginBottom:4, display:'block' };
+
+  const BtnGroup = ({ opts, k }) => (
+    <div style={{ display:'flex', gap:5 }}>
+      {opts.map(([val, label]) => (
+        <button key={val} onClick={() => sv(k, val)} style={{
+          flex:1, padding:'7px 4px', fontSize:11, fontWeight:600,
+          border:`1px solid ${layout[k]===val ? '#2563eb' : '#c3c6d7'}`,
+          borderRadius:4, cursor:'pointer',
+          background: layout[k]===val ? '#eff4ff' : '#fff',
+          color: layout[k]===val ? '#2563eb' : '#565e74',
+        }}>{label}</button>
+      ))}
+    </div>
+  );
+
+  return (
+    <div style={{ overflowY:'auto', height:'100%' }}>
+      <div style={S}>
+        <div style={T}>Tamanho do papel</div>
+        <BtnGroup k="paper" opts={Object.keys(PAPER).map(k=>[k,k])}/>
+      </div>
+      <div style={S}>
+        <div style={T}>Orientação</div>
+        <BtnGroup k="orientation" opts={[['portrait','Retrato'],['landscape','Paisagem']]}/>
+      </div>
+      <div style={S}>
+        <div style={T}>Grade</div>
+        <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+          <div><span style={L}>Colunas: {cols}</span><input type="range" min={1} max={6} value={cols} onChange={e=>sv('cols',+e.target.value)}/></div>
+          <div><span style={L}>Linhas: {rows}</span><input type="range" min={1} max={8} value={rows} onChange={e=>sv('rows',+e.target.value)}/></div>
+        </div>
+      </div>
+      <div style={{ padding:'16px 14px' }}>
+        <div style={{ background:'#eff4ff', borderRadius:6, padding:16, display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+          <div style={{ textAlign:'center' }}>
+            <div style={{ fontSize:24, fontWeight:700, color:'#2563eb' }}>{ppp}</div>
+            <div style={{ fontSize:10, color:'#737686', textTransform:'uppercase', letterSpacing:'.06em', marginTop:2 }}>por página</div>
+          </div>
+          <div style={{ textAlign:'center' }}>
+            <div style={{ fontSize:24, fontWeight:700, color:'#2563eb' }}>{pages}</div>
+            <div style={{ fontSize:10, color:'#737686', textTransform:'uppercase', letterSpacing:'.06em', marginTop:2 }}>páginas</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── App ─────────────────────────────────────────────────────────────────── */
+function App() {
+  const [tab, setTab] = useState('products');
+  const [products, setProducts] = useState(SAMPLES);
+  const [d, setD] = useState(DEF_DESIGN);
+  const [layout, setLayout] = useState(DEF_LAYOUT);
+  const [zoom, setZoom] = useState(0.75);
+  const [csvOpen, setCsvOpen] = useState(false);
+
+  const baseW = PAPER[layout.paper].w;
+  const baseH = PAPER[layout.paper].h;
+  const pageW = layout.orientation === 'portrait' ? baseW : baseH;
+  const pageH = layout.orientation === 'portrait' ? baseH : baseW;
+
+  const ppp = layout.cols * layout.rows;
+  const pages = products.length === 0 ? [[]] : [];
+  if (products.length > 0) {
+    for (let i = 0; i < products.length; i += ppp) pages.push(products.slice(i, i + ppp));
+  }
+
+  const totalH = pages.length * pageH + Math.max(0, pages.length - 1) * 24;
+
+  const exportPDF = () => {
+    const s = document.createElement('style');
+    s.id = '__ps';
+    s.textContent = `
+      @page{size:${pageW}px ${pageH}px;margin:0}
+      @media print{
+        html,body{margin:0;padding:0}
+        body>*{display:none!important}
+        #__pr{display:block!important}
+        #__pr .catalog-page{margin:0;box-shadow:none!important;page-break-after:always}
+        #__pr .catalog-page:last-child{page-break-after:avoid}
+      }`;
+    document.head.appendChild(s);
+    const src = document.getElementById('catalog-preview');
+    const pr = document.createElement('div');
+    pr.id = '__pr'; pr.style.cssText = 'display:none';
+    pr.innerHTML = src.innerHTML;
+    document.body.appendChild(pr);
+    window.print();
+    setTimeout(() => { document.head.removeChild(s); document.body.removeChild(pr); }, 1500);
+  };
+
+  const TABS = [
+    { k:'products', label:'Produtos',  icon:'box' },
+    { k:'design',   label:'Aparência', icon:'palette' },
+    { k:'layout',   label:'Estrutura', icon:'layout' },
+  ];
+
+  const zBtn = { padding:'5px 8px', background:'#fff', border:'1px solid #c3c6d7', borderRadius:4, cursor:'pointer', display:'flex', alignItems:'center' };
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', height:'100vh', overflow:'hidden' }}>
+      {/* Top bar */}
+      <header style={{
+        height:54, background:'#fff', borderBottom:'1px solid rgba(195,198,215,.35)',
+        display:'flex', alignItems:'center', justifyContent:'space-between',
+        padding:'0 24px', flexShrink:0, zIndex:50,
+      }}>
+        <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+          <span style={{ fontSize:16, fontWeight:700, color:'#0b1c30', letterSpacing:'-.02em' }}>Catalog</span>
+          <span style={{ fontSize:16, fontWeight:300, color:'#565e74' }}>Studio</span>
+        </div>
+        <span style={{ fontSize:10, fontWeight:600, letterSpacing:'.18em', textTransform:'uppercase', color:'rgba(86,94,116,.45)' }}>
+          Status: Rascunho
+        </span>
+        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+          <span style={{ fontSize:11, fontWeight:600, color:'#565e74', cursor:'default', letterSpacing:'.04em', textTransform:'uppercase' }}>Salvar</span>
+          <button onClick={exportPDF} style={{
+            padding:'7px 18px', fontSize:11, fontWeight:700, letterSpacing:'.06em',
+            textTransform:'uppercase', background:'#0b1c30', color:'#fff',
+            border:'none', borderRadius:100, cursor:'pointer',
+          }}>Exportar PDF</button>
+        </div>
+      </header>
+
+      {/* Body */}
+      <div style={{ display:'flex', flex:1, overflow:'hidden' }}>
+        {/* Sidebar */}
+        <aside style={{
+          width:340, flexShrink:0, background:'#fff',
+          borderRight:'1px solid rgba(195,198,215,.35)',
+          display:'flex', flexDirection:'column', overflow:'hidden',
+        }}>
+          <div style={{ padding:'14px 18px 10px', borderBottom:'1px solid #e5eeff', flexShrink:0 }}>
+            <div style={{ fontSize:9, fontWeight:700, letterSpacing:'.15em', textTransform:'uppercase', color:'#737686', marginBottom:3 }}>Editor</div>
+            <div style={{ fontSize:13, fontWeight:600, color:'#0b1c30' }}>{d.catalogTitle || 'Catálogo'}</div>
+          </div>
+
+          {/* Tabs */}
+          <div style={{ display:'flex', borderBottom:'1px solid #e5eeff', flexShrink:0 }}>
+            {TABS.map(t => (
+              <button key={t.k} onClick={() => setTab(t.k)} style={{
+                flex:1, padding:'9px 2px', border:'none', background:'none', cursor:'pointer',
+                display:'flex', flexDirection:'column', alignItems:'center', gap:2,
+                borderBottom: tab===t.k ? '2px solid #2563eb' : '2px solid transparent',
+                color: tab===t.k ? '#2563eb' : '#737686',
+                fontSize:9, fontWeight:600, letterSpacing:'.06em', textTransform:'uppercase',
+              }}>
+                <Icon n={t.icon} size={15} color={tab===t.k ? '#2563eb':'#737686'}/>
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          <div style={{ flex:1, overflow:'hidden' }}>
+            {tab==='products' && <ProductsPanel products={products} setProducts={setProducts} onCSV={()=>setCsvOpen(true)} d={d} setD={setD}/>}
+            {tab==='design'   && <DesignPanel d={d} setD={setD}/>}
+            {tab==='layout'   && <LayoutPanel layout={layout} setLayout={setLayout} count={products.length}/>}
+          </div>
+        </aside>
+
+        {/* Preview */}
+        <main style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:d.pageBg }}>
+          {/* Zoom bar */}
+          <div style={{
+            height:42, display:'flex', alignItems:'center', gap:6, padding:'0 16px',
+            borderBottom:'1px solid rgba(195,198,215,.25)',
+            background:'rgba(255,255,255,.75)', backdropFilter:'blur(8px)',
+            flexShrink:0,
+          }}>
+            <button onClick={() => setZoom(z=>Math.max(.2,+(z-.1).toFixed(2)))} style={zBtn}><Icon n="zoomOut" size={14} color="#565e74"/></button>
+            <span style={{ fontSize:11, fontWeight:600, color:'#565e74', minWidth:38, textAlign:'center' }}>{Math.round(zoom*100)}%</span>
+            <button onClick={() => setZoom(z=>Math.min(2,+(z+.1).toFixed(2)))} style={zBtn}><Icon n="zoomIn" size={14} color="#565e74"/></button>
+            <button onClick={() => setZoom(.75)} style={{ ...zBtn, fontSize:10, fontWeight:600, color:'#737686', padding:'5px 10px' }}>Reset</button>
+            <span style={{ fontSize:10, color:'#aaa', marginLeft:6 }}>
+              {pages.length} {pages.length===1?'página':'páginas'} · {products.length} produtos
+            </span>
+          </div>
+
+          {/* Canvas scroll area */}
+          <div style={{ flex:1, overflow:'auto', padding:'32px 40px', display:'flex', justifyContent:'center' }}>
+            {/* Wrapper that reserves correct space for scaled content */}
+            <div style={{
+              position:'relative',
+              width: pageW * zoom,
+              height: totalH * zoom,
+              flexShrink:0,
+            }}>
+              <div style={{ position:'absolute', top:0, left:0, transform:`scale(${zoom})`, transformOrigin:'top left' }}>
+                <div id="catalog-preview" style={{ display:'flex', flexDirection:'column', gap:24, width:pageW }}>
+                  {pages.map((ps, i) => (
+                    <CatalogPage key={i} products={ps} d={d} layout={layout}
+                      pageNum={i+1} total={pages.length} pageW={pageW} pageH={pageH}/>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+
+      {csvOpen && (
+        <CSVModal
+          onImport={ps => setProducts(prev => [...prev, ...ps])}
+          onClose={() => setCsvOpen(false)}
+          design={d}
+        />
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
