@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  catalogstudio:
+    build: .
+    container_name: catalogstudio
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run
+      - /var/cache/nginx
+      - /tmp

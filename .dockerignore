@@ -1,0 +1,11 @@
+.git
+.gitignore
+.dockerignore
+.claude
+Dockerfile
+docker-compose.yml
+DESIGN.md
+Funcionality.md
+README.md
+screen.png
+code.html
