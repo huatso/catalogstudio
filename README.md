@@ -35,7 +35,7 @@ Toggles individuais para exibir ou ocultar no catálogo:
 ### Personalização visual (aba Aparência)
 
 - **Identidade** -- nome da empresa, título do catálogo, logotipo, rodapé, label do preço.
-- **Cores** -- cor primária, cor do texto sobre primária, fundo da página, fundo do card, cor do texto.
+- **Cores** -- cor primária, cor do texto sobre primária, fundo da página, fundo do card, cor do texto. Arraste horizontalmente no seletor para alterar o matiz (hue) e verticalmente para ajustar a luminosidade. Clique para abrir o seletor nativo de cores e escolher um valor exato.
 - **Tipografia** -- seleção de fonte (Inter, Roboto, Poppins, Georgia, Arial) e tamanho base.
 - **Cabeçalho** -- estilo completo, mínimo ou nenhum.
 - **Cards** -- raio da borda, altura da imagem, bordas.
